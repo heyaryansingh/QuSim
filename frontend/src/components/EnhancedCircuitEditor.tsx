@@ -3,7 +3,10 @@ import { Box, Tabs, Tab, TextField, Paper, Typography, Button, Grid } from '@mui
 import { PlayArrow as PlayIcon, Code as CodeIcon, Build as BuildIcon } from '@mui/icons-material';
 import VisualCircuitEditor, { Gate, Wire } from './VisualCircuitEditor';
 import GatePalette from './GatePalette';
-import { executeCircuit } from '../services/api';
+import BlochSphere from './BlochSphere';
+import StateVisualization from './StateVisualization';
+import MetricsDisplay from './MetricsDisplay';
+import { executeCircuit, getVisualizationData, getEntanglementMetrics } from '../services/api';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -35,6 +38,9 @@ const EnhancedCircuitEditor: React.FC = () => {
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [nextGateId, setNextGateId] = useState(1);
+  const [blochData, setBlochData] = useState<any>(null);
+  const [stateData, setStateData] = useState<any>(null);
+  const [entanglementData, setEntanglementData] = useState<any>(null);
 
   // Convert visual circuit to DSL
   const visualToDSL = useCallback(() => {
@@ -174,7 +180,59 @@ const EnhancedCircuitEditor: React.FC = () => {
         shots: 1000,
         return_state_history: true,
       });
-      setResult(response);
+      setResult(response.result || response);
+
+      // Fetch visualization data
+      try {
+        const bloch = await getVisualizationData(codeToExecute, 'bloch', 0);
+        setBlochData(bloch);
+
+        // Extract state data from result
+        if (response.result) {
+          const result = response.result;
+          const numStates = Math.pow(2, numQubits);
+          const basisStates = Array.from({ length: numStates }, (_, i) => {
+            return i.toString(2).padStart(numQubits, '0');
+          });
+
+          if (result.amplitudes) {
+            // Statevector format
+            const amplitudes = result.amplitudes.map((a: any) => {
+              if (typeof a === 'object' && a !== null) {
+                return Math.sqrt(a.real * a.real + (a.imag || 0) * (a.imag || 0));
+              }
+              return Math.abs(a);
+            });
+            const phases = result.amplitudes.map((a: any) => {
+              if (typeof a === 'object' && a !== null) {
+                return Math.atan2(a.imag || 0, a.real || 0);
+              }
+              return Math.atan2(0, a);
+            });
+
+            setStateData({
+              amplitudes: amplitudes.slice(0, numStates),
+              phases: phases.slice(0, numStates),
+              probabilities: result.probabilities || [],
+              basisStates,
+            });
+          } else if (result.diagonal) {
+            // Density matrix format - use diagonal as probabilities
+            setStateData({
+              amplitudes: result.diagonal.slice(0, numStates).map((p: number) => Math.sqrt(p)),
+              phases: new Array(numStates).fill(0),
+              probabilities: result.diagonal.slice(0, numStates),
+              basisStates,
+            });
+          }
+        }
+
+        // Fetch entanglement metrics
+        const entanglement = await getEntanglementMetrics(codeToExecute);
+        setEntanglementData(entanglement);
+      } catch (vizError) {
+        console.warn('Could not fetch visualization data:', vizError);
+      }
     } catch (error) {
       console.error('Error executing circuit:', error);
       setResult({ error: String(error) });
@@ -251,33 +309,87 @@ const EnhancedCircuitEditor: React.FC = () => {
           </Button>
           {result && (
             <Box sx={{ mt: 2 }}>
-              <Typography variant="h6">Results</Typography>
-              <pre style={{ backgroundColor: '#f5f5f5', padding: '10px', borderRadius: '4px', overflow: 'auto' }}>
-                {JSON.stringify(result, null, 2)}
-              </pre>
+              <MetricsDisplay result={result} loading={loading} />
             </Box>
           )}
         </Paper>
       </TabPanel>
 
       <TabPanel value={tabValue} index={2}>
-        <Typography>Bloch sphere visualization will appear here</Typography>
+        <Grid container spacing={2}>
+          <Grid item xs={12} md={6}>
+            <Paper sx={{ p: 2 }}>
+              <Typography variant="h6" gutterBottom>
+                Bloch Sphere Visualization
+              </Typography>
+              <BlochSphere blochData={blochData} numQubits={numQubits} />
+            </Paper>
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <Paper sx={{ p: 2 }}>
+              <Typography variant="h6" gutterBottom>
+                State Visualization
+              </Typography>
+              <StateVisualization stateData={stateData} />
+            </Paper>
+          </Grid>
+        </Grid>
       </TabPanel>
 
       <TabPanel value={tabValue} index={3}>
-        <Typography>Noise and error analysis will appear here</Typography>
+        <Paper sx={{ p: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Noise and Error Analysis
+          </Typography>
+          <MetricsDisplay result={result} loading={loading} />
+        </Paper>
       </TabPanel>
 
       <TabPanel value={tabValue} index={4}>
-        <Typography>Entanglement metrics will appear here</Typography>
+        <Paper sx={{ p: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Entanglement Metrics
+          </Typography>
+          {entanglementData ? (
+            <Box>
+              <Typography variant="body1" gutterBottom>
+                Total Entropy: {entanglementData.total_entropy?.toFixed(4) || 'N/A'}
+              </Typography>
+              {entanglementData.pairwise_mutual_information && (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle1" gutterBottom>
+                    Pairwise Mutual Information Matrix
+                  </Typography>
+                  <pre style={{ backgroundColor: '#f5f5f5', padding: '10px', borderRadius: '4px', overflow: 'auto' }}>
+                    {JSON.stringify(entanglementData.pairwise_mutual_information, null, 2)}
+                  </pre>
+                </Box>
+              )}
+            </Box>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              Execute a circuit to see entanglement metrics
+            </Typography>
+          )}
+        </Paper>
       </TabPanel>
 
       <TabPanel value={tabValue} index={5}>
-        <Typography>Resource tracking will appear here</Typography>
+        <Paper sx={{ p: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Resource Tracking
+          </Typography>
+          <MetricsDisplay result={result} loading={loading} />
+        </Paper>
       </TabPanel>
 
       <TabPanel value={tabValue} index={6}>
-        <Typography>Failure diagnostics will appear here</Typography>
+        <Paper sx={{ p: 2 }}>
+          <Typography variant="h6" gutterBottom>
+            Failure Diagnostics
+          </Typography>
+          <MetricsDisplay result={result} loading={loading} />
+        </Paper>
       </TabPanel>
     </Box>
   );

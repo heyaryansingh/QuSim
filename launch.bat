@@ -1,12 +1,5 @@
 @echo off
 REM QuSim Launcher for Windows
-echo ============================================================
-echo   QuSim Quantum Circuit Simulator - Launcher
-echo ============================================================
-echo.
-
+cd /d "%~dp0"
 python launch.py
-
 pause
-
-
